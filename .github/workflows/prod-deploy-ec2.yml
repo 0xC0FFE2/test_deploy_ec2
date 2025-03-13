@@ -1,0 +1,64 @@
+name: Docker Build and Deploy to EC2
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+      
+    - name: Login to DockerHub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+        
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: true
+        tags: ${{ secrets.DOCKERHUB_USERNAME }}/test-fortune-app:latest
+        
+    - name: Deploy to EC2
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ${{ secrets.EC2_USERNAME }}
+        key: ${{ secrets.EC2_SSH_KEY }}
+        script: |
+          # Docker가 설치되어 있는지 확인
+          if ! command -v docker &> /dev/null; then
+            echo "Docker가 설치되어 있지 않습니다. 설치를 시작합니다..."
+            sudo apt-get update
+            sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+            sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+            sudo apt-get update
+            sudo apt-get install -y docker-ce
+          fi
+          
+          # Docker Compose가 설치되어 있는지 확인
+          if ! command -v docker-compose &> /dev/null; then
+            echo "Docker Compose가 설치되어 있지 않습니다. 설치를 시작합니다..."
+            sudo curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+            sudo chmod +x /usr/local/bin/docker-compose
+          fi
+          
+          # 현재 실행 중인 컨테이너 중지 및 제거
+          docker stop test-fortune-app || true
+          docker rm test-fortune-app || true
+          
+          # 최신 이미지 가져오기
+          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/test-fortune-app:latest
+          
+          # 컨테이너 실행
+          docker run -d --name test-fortune-app -p 3000:3000 --restart always ${{ secrets.DOCKERHUB_USERNAME }}/test-fortune-app:latest
